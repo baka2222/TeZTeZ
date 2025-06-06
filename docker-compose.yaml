@@ -1,0 +1,61 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: teztez
+      POSTGRES_USER: teztez
+      POSTGRES_PASSWORD: teztez
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  django:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: >
+      sh -c "
+        python manage.py migrate &&
+        python manage.py collectstatic --noinput &&
+        python manage.py createsuperuser --noinput &&
+        python manage.py runserver 0.0.0.0:8010
+      "
+    volumes:
+      - ./backend:/app
+    environment:
+      - DJANGO_SETTINGS_MODULE=backend.settings
+      - DB_HOST=db
+      - DB_NAME=teztez
+      - DB_USER=teztez
+      - DB_PASS=teztez
+      - DB_PORT=5432
+      - DJANGO_SUPERUSER_USERNAME=baka123
+      - DJANGO_SUPERUSER_EMAIL=ikaoss222@gmail.com
+      - DJANGO_SUPERUSER_PASSWORD=7532169
+    depends_on:
+      - db
+    ports:
+      - "8010:8010"
+
+  bot:
+    build:
+      context: .
+      dockerfile: bot/Dockerfile
+    command: python main.py
+    environment:
+      - DJANGO_SETTINGS_MODULE=backend.settings
+      - DB_HOST=db
+      - DB_NAME=teztez
+      - DB_USER=teztez
+      - DB_PASS=teztez
+      - DB_PORT=5432
+      - BOT_TOKEN=${BOT_TOKEN}
+    depends_on:
+      - django
+
+volumes:
+  postgres_data:
