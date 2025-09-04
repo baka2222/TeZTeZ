@@ -1,4 +1,4 @@
-from aiogram import Router, types
+from aiogram import Router, types 
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
@@ -8,6 +8,8 @@ from aiogram.types import (
 )
 import os
 import sys
+from django.utils import timezone
+from datetime import timedelta
 
 BACKEND_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'backend'))
 if BACKEND_ROOT not in sys.path:
@@ -21,10 +23,43 @@ from client.models import Client
 from asgiref.sync import sync_to_async
 
 sellbuy_router = Router()
-CHANNEL_ID = -1002615944125
-CHANNEL_LINK = "https://t.me/teztezfg"
+
+CHANNELS = {
+    "Веломаркет": {
+        "id": -1002615944125,
+        "link": "https://t.me/teztezfg",
+        "cooldown_field": "next_ability"
+    },
+    "Бьютимаркет": {
+        "id": -1002762051372,
+        "link": "https://t.me/tezbueaty/4",
+        "cooldown_field": "next_ability_beauty"
+    },
+    "Техномаркет": {
+        "id": -1002897679802,
+        "link": "https://t.me/teztechno/2",
+        "cooldown_field": "next_ability_techno"
+    },
+    "Автомотомаркет": {
+        "id": -1002549461746,
+        "link": "https://t.me/tezautomoto/2",
+        "cooldown_field": "next_ability_automoto"
+    },
+    "Недвижимость": {
+        "id": -1002711157981,
+        "link": "https://t.me/tezhousing/2",
+        "cooldown_field": "next_ability_housing"
+    },
+    "Работа": {
+        "id": -1002788239459,
+        "link": "https://t.me/tezzjob/3",
+        "cooldown_field": "next_ability_job"
+    }
+}
+
 
 class SellFSM(StatesGroup):
+    category = State()
     status = State()
     name = State()
     desc = State()
@@ -33,44 +68,92 @@ class SellFSM(StatesGroup):
     show_phone = State()
     confirm = State()
 
-def get_status_emoji(status):
-    return {
-        "Продажа": "💰",
-        "Обмен": "🔄",
-        "Поиск": "🔎"
-    }.get(status, "")
-
 @sync_to_async
 def get_client_phone(tg_code):
     try:
-        client = Client.objects.get(tg_code=str(tg_code))
-        return client.phone or "Не указан"
+        return Client.objects.get(tg_code=str(tg_code)).phone or "Не указан"
     except Client.DoesNotExist:
         return "Не указан"
 
+@sync_to_async
+def set_next_ability(client, field_name: str):
+    setattr(client, field_name, timezone.now() + timedelta(days=2))
+    client.save()
+
 @sellbuy_router.message(Command("sell"))
 async def start_sell(message: types.Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    client = await sync_to_async(Client.objects.filter(tg_code=user_id).first)()
+    client = await sync_to_async(Client.objects.filter(tg_code=str(message.from_user.id)).first)()
     if not client:
-        await message.answer(
-            "❗️Вы не зарегистрированы!\n"
-            "Пожалуйста, используйте команду \n /start для регистрации.",
-            parse_mode="HTML"
-        )
+        await message.answer("❗️ Вы не зарегистрированы! Пожалуйста, используйте /start.")
         return
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Продать", callback_data="status_sell"),
-                InlineKeyboardButton(text="Обмен", callback_data="status_exchange"),
-                InlineKeyboardButton(text="Ищу", callback_data="status_search"),
-            ]
-        ]
-    )
+    if client.is_banned:
+        await message.answer("🚫 Вы заблокированы и не можете размещать объявления.")
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=name, callback_data=f"cat_{name}")]
+        for name in CHANNELS.keys()
+    ])
     await message.answer(
-        "🛒 <b>Создание объявления</b>\n\n"
-        "Выберите статус вашего объявления:",
+        "🛒 <b>Создание нового объявления</b>\n\n"
+        "📌 Выберите категорию для размещения:",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+    await state.set_state(SellFSM.category)
+
+@sellbuy_router.callback_query(SellFSM.category)
+async def choose_category(callback: types.CallbackQuery, state: FSMContext):
+    sel = callback.data.removeprefix("cat_")
+    client = await sync_to_async(Client.objects.get)(tg_code=str(callback.from_user.id))
+    field = CHANNELS[sel]["cooldown_field"]
+    now = timezone.now()
+    next_allowed = getattr(client, field)
+    if next_allowed and next_allowed > now:
+        wait = next_allowed - now
+        total_minutes = int(wait.total_seconds() // 60)
+        days = total_minutes // (24 * 60)
+        hours = (total_minutes % (24 * 60)) // 60
+        minutes = total_minutes % 60
+        parts = []
+        if days:
+            parts.append(f"{days} дн.")
+        if hours:
+            parts.append(f"{hours} ч.")
+        if minutes:
+            parts.append(f"{minutes} мин.")
+        if not parts:
+            parts.append("менее 1 мин.")
+        await callback.message.edit_text(
+            f"⏳ Вы уже публиковали в {sel} недавно.\n"
+            f"⏱ Следующее размещение будет доступно через: {' '.join(parts)}"
+        )
+        await state.clear()
+        return
+    await state.update_data(category=sel)
+    
+    # Стандартные кнопки для всех категорий
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="💰 Продать", callback_data="status_sell"),
+        InlineKeyboardButton(text="🔄 Обмен", callback_data="status_exchange"),
+        InlineKeyboardButton(text="🔍 Ищу", callback_data="status_search"),
+    ]])
+
+    # Специальные кнопки для категорий
+    if sel == 'Недвижимость':
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="💰 Продать", callback_data="status_sell"),
+            InlineKeyboardButton(text="🔑 Сдаю", callback_data="status_hand"),
+            InlineKeyboardButton(text="🔍 Ищу", callback_data="status_search"),
+        ]])
+    elif sel == 'Работа':
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="👨‍💼 Резюме", callback_data="status_resume"),
+            InlineKeyboardButton(text="💼 Вакансия", callback_data="status_vacancy"),
+        ]])
+
+    await callback.message.edit_text(
+        f"🗂 Категория: <b>{sel}</b> \n\n"
+        "📌 Выберите тип вашего объявления:",
         reply_markup=kb,
         parse_mode="HTML"
     )
@@ -80,15 +163,17 @@ async def start_sell(message: types.Message, state: FSMContext):
 async def choose_status(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     status_map = {
-        "status_sell": "Продажа",
-        "status_exchange": "Обмен",
-        "status_search": "Поиск"
+        "status_sell": "💰 Продажа", 
+        "status_exchange": "🔄 Обмен", 
+        "status_search": "🔍 Поиск", 
+        "status_hand": "🔑 Сдаю",
+        "status_resume": "👨‍💼 Резюме",
+        "status_vacancy": "💼 Вакансия"
     }
-    status = status_map.get(callback.data, "Продажа")
+    status = status_map.get(callback.data, "💰 Продажа")
     await state.update_data(status=status)
     await callback.message.edit_text(
-        f"Статус: <b>{status}</b>\n\n"
-        "Введите <b>название</b> товара:",
+        f"📝 Теперь введите <b>название товара</b>:",
         parse_mode="HTML"
     )
     await state.set_state(SellFSM.name)
@@ -97,8 +182,11 @@ async def choose_status(callback: types.CallbackQuery, state: FSMContext):
 async def get_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
     await message.answer(
-        "📝 Опишите ваш товар как можно подробнее:\n\n"
-        "<i>Например: состояние, комплектация, особенности...</i>",
+        "📝 <b>Опишите ваш товар подробно:</b>\n\n"
+        "<i>• Состояние товара\n"
+        "• Комплектация\n"
+        "• Особенности\n"
+        "• Дополнительная информация</i>",
         parse_mode="HTML"
     )
     await state.set_state(SellFSM.desc)
@@ -107,7 +195,8 @@ async def get_name(message: types.Message, state: FSMContext):
 async def get_desc(message: types.Message, state: FSMContext):
     await state.update_data(desc=message.text)
     await message.answer(
-        "💵 Укажите цену (только число, например: 1500):",
+        "💵 <b>Укажите цену в KGS:</b>\n\n"
+        "<i>Введите только число, например: 2500</i>",
         parse_mode="HTML"
     )
     await state.set_state(SellFSM.price)
@@ -117,15 +206,22 @@ async def get_price(message: types.Message, state: FSMContext):
     price_text = message.text.replace(" ", "")
     if not price_text.isdigit():
         await message.answer(
-            "❗️Цена должна быть числом. Введите только число, например: 1500",
+            "❗️ <b>Некорректная цена!</b>\n"
+            "Цена должна быть числом. Введите только число, например: 3500",
             parse_mode="HTML"
         )
         return
-    await state.update_data(price=price_text)
-    await state.update_data(photos=[])
+    await state.update_data(price=price_text, photos=[])
     await message.answer(
-        "📸 Пришлите до 10 фотографий товара (по одной).",
-        reply_markup=types.ReplyKeyboardRemove(),
+        "📸 <b>Добавьте фотографии товара</b>\n\n"
+        "• Можно загрузить до 10 фото\n"
+        "• Отправляйте по одному фото\n"
+        "• Когда закончите, нажмите <b>Готово ✅</b>",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="Готово ✅")]],
+            resize_keyboard=True,
+            one_time_keyboard=True
+        ),
         parse_mode="HTML"
     )
     await state.set_state(SellFSM.photos)
@@ -136,88 +232,74 @@ async def get_photos(message: types.Message, state: FSMContext):
     photos = data.get("photos", [])
     if message.photo:
         if len(photos) >= 10:
-            await message.answer(
-                "Можно добавить не больше 10 фото.",
-                parse_mode="HTML"
-            )
+            await message.answer("⚠️ <b>Максимум 10 фото!</b> Нажмите <b>Готово ✅</b>", parse_mode="HTML")
             return
         file_id = message.photo[-1].file_id
         photos.append(file_id)
         await state.update_data(photos=photos)
-        if len(photos) == 1:
-            kb = ReplyKeyboardMarkup(
-                keyboard=[[KeyboardButton(text="Готово ✅")]],
-                resize_keyboard=True,
-                one_time_keyboard=True
-            )
-            await message.answer(
-                f"Фото {len(photos)}/10 добавлено. Можете добавить ещё или нажмите <b>Готово ✅</b>.",
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
-        else:
-            await message.answer(
-                f"Фото {len(photos)}/10 добавлено. Можете добавить ещё или нажмите <b>Готово ✅</b>.",
-                parse_mode="HTML"
-            )
-    elif message.text and "готово" in message.text.lower():
-        if not photos:
-            await message.answer(
-                "Сначала добавьте хотя бы одну фотографию!",
-                parse_mode="HTML"
-            )
-            return
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="Показывать номер", callback_data="show_phone_yes"),
-                    InlineKeyboardButton(text="Скрыть номер", callback_data="show_phone_no")
-                ]
-            ]
+
+        kb = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="Готово ✅")]],
+            resize_keyboard=True
         )
         await message.answer(
-            "📞 Показывать ваш номер телефона в объявлении?",
-            reply_markup=kb
+            f"✅ Фото {len(photos)}/10 добавлено!\n"
+            "Можете добавить ещё или нажать <b>Готово ✅</b>",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+
+    elif message.text and message.text.lower() in ["готово", "готово ✅"]:
+        if not photos:
+            await message.answer("❌ Сначала добавьте хотя бы одну фотографию!", reply_markup=None)
+            return
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(text="✅ Показывать номер", callback_data="show_phone_yes"),
+                InlineKeyboardButton(text="❌ Скрыть номер", callback_data="show_phone_no")
+            ]]
+        )
+        await message.answer(
+            "📞 <b>Показывать ваш номер телефона в объявлении?</b>",
+            reply_markup=kb,
+            parse_mode="HTML"
         )
         await state.set_state(SellFSM.show_phone)
     else:
-        await message.answer(
-            "Пришлите фото или нажмите <b>Готово ✅</b>.",
-            parse_mode="HTML"
-        )
+        await message.answer("📸 Отправьте фото товара или нажмите <b>Готово ✅</b>", parse_mode="HTML")
 
 @sellbuy_router.callback_query(SellFSM.show_phone)
 async def choose_phone_visibility(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     show_phone = callback.data == "show_phone_yes"
     await state.update_data(show_phone=show_phone)
-    await callback.message.edit_text("🔍 Проверьте объявление и подтвердите отправку.")
-
     data = await state.get_data()
-    status = data.get("status")
-    name = data.get("name")
-    desc = data.get("desc")
-    price = data.get("price")
-    photos = data.get("photos", [])
-    user = callback.from_user
 
-    phone = await get_client_phone(user.id) if show_phone else "Скрыт"
-    status_emoji = get_status_emoji(status)
-    phone_text = f"📱 <b>Номер:</b> <a>+{phone}</a>" if show_phone else "📱 <b>Номер:</b> <i>Скрыт</i>"
-    price_text = f"💵 <b>Цена:</b> {price} ₽"
-    contact_link = f"✉️ <a href='tg://user?id={user.id}'>Написать продавцу</a>"
+    # Обновленный словарь эмодзи статусов
+    status_emoji = {
+        "💰 Продажа": "💰", 
+        "🔄 Обмен": "🔄", 
+        "🔍 Поиск": "🔍", 
+        "🔑 Сдаю": "🔑",
+        "👨‍💼 Резюме": "👨‍💼",
+        "💼 Вакансия": "💼"
+    }
+    emoji = status_emoji.get(data["status"], "")
+    
+    phone_text = f"📱 <b>Телефон:</b> {await get_client_phone(callback.from_user.id)}" if show_phone else "📱 <b>Телефон:</b> <i>Скрыт</i>"
 
     text = (
-        f"{status_emoji} <b>{status}</b>\n"
-        f"🏷 <b>{name}</b>\n\n"
-        f"{desc}\n\n"
-        f"{price_text}\n"
+        f"<b>{data['status']}</b>\n"
+        f"🏷️ <b>{data['name']}</b> \n\n"
+        f"{data['desc']}\n\n"
+        f"💵 <b>Цена:</b> {data['price']} KGS\n"
         f"{phone_text}\n"
-        f"{contact_link}"
+        f"✉️ <a href='tg://user?id={callback.from_user.id}'>Связаться</a>"
     )
 
-    if photos:
-        media = [InputMediaPhoto(media=pid) for pid in photos]
+    if data['photos']:
+        media = [InputMediaPhoto(media=pid) for pid in data['photos']]
         media[0].caption = text
         media[0].parse_mode = "HTML"
         await callback.message.answer_media_group(media)
@@ -225,56 +307,75 @@ async def choose_phone_visibility(callback: types.CallbackQuery, state: FSMConte
         await callback.message.answer(text, parse_mode="HTML")
 
     kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Отправить в канал", callback_data="send_to_channel")]
-        ]
+        inline_keyboard=[[
+            InlineKeyboardButton(text="🚀 Опубликовать", callback_data="confirm_send"),
+            InlineKeyboardButton(text="❌ Отменить", callback_data="confirm_cancel")
+        ]]
     )
-    await callback.message.answer("Готово к публикации?", reply_markup=kb)
+    await callback.message.answer(
+        "📝 <b>Предпросмотр объявления</b>\n\n"
+        "Всё верно? Отправляем в канал?",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
     await state.set_state(SellFSM.confirm)
 
 @sellbuy_router.callback_query(SellFSM.confirm)
 async def send_to_channel(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer("Объявление отправлено!")
-    data = await state.get_data()
-    status = data.get("status")
-    name = data.get("name")
-    desc = data.get("desc")
-    price = data.get("price")
-    photos = data.get("photos", [])
-    show_phone = data.get("show_phone")
-    user = callback.from_user
+    if callback.data == "confirm_cancel":
+        await callback.message.edit_text("❌ Публикация отменена")
+        await state.clear()
+        return
 
-    phone = await get_client_phone(user.id) if show_phone else "Скрыт"
-    status_emoji = get_status_emoji(status)
-    phone_text = f"📱 <b>Номер:</b> <code>+{phone}</code>" if show_phone else "📱 <b>Номер:</b> <i>Скрыт</i>"
-    price_text = f"💵 <b>Цена:</b> {price} KGS"
-    contact_link = f"✉️ <a href='tg://user?id={user.id}'>Написать продавцу</a>"
+    await callback.answer("⏳ Отправляем объявление...")
+    data = await state.get_data()
+    chan_info = CHANNELS[data['category']]
+
+    # Обновленный словарь эмодзи статусов
+    status_emoji = {
+        "💰 Продажа": "💰", 
+        "🔄 Обмен": "🔄", 
+        "🔍 Поиск": "🔍", 
+        "🔑 Сдаю": "🔑",
+        "👨‍💼 Резюме": "👨‍💼",
+        "💼 Вакансия": "💼"
+    }
+    emoji = status_emoji.get(data["status"], "")
+    
+    phone_text = f"📱 <b>Телефон:</b> {await get_client_phone(callback.from_user.id)}" if data.get('show_phone') else "📱 <b>Телефон:</b> <i>Скрыт</i>"
 
     text = (
-        f"{status_emoji} <b>{status}</b>\n"
-        f"🏷 <b>{name}</b>\n\n"
-        f"{desc}\n\n"
-        f"{price_text}\n"
+        f"<b>{data['status']}</b>\n"
+        f"🏷️ <b>{data['name']}</b> \n\n"
+        f"{data['desc']}\n\n"
+        f"💵 <b>Цена:</b> {data['price']} KGS\n"
         f"{phone_text}\n"
-        f"{contact_link}"
+        f"✉️ <a href='tg://user?id={callback.from_user.id}'>Связаться</a>\n"
+        f"📢 <a href='https://t.me/tez4917_bot'>Разместить объявление</a>"
     )
 
-    if photos:
-        media = [InputMediaPhoto(media=pid) for pid in photos]
-        media[0].caption = text
-        media[0].parse_mode = "HTML"
-        await callback.bot.send_media_group(CHANNEL_ID, media)
-    else:
-        await callback.bot.send_message(CHANNEL_ID, text, parse_mode="HTML")
+    try:
+        if data['photos']:
+            media = [InputMediaPhoto(media=pid) for pid in data.get('photos', [])]
+            media[0].caption = text
+            media[0].parse_mode = "HTML"
+            await callback.bot.send_media_group(chan_info['id'], media)
+        else:
+            await callback.bot.send_message(chan_info['id'], text, parse_mode="HTML")
 
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="👁 Посмотреть объявление", url=CHANNEL_LINK)]
+        client = await sync_to_async(Client.objects.get)(tg_code=str(callback.from_user.id))
+        await set_next_ability(client, chan_info['cooldown_field'])
+
+        await callback.message.edit_text(
+            "✅ <b>Объявление опубликовано!</b>",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="👁️ Посмотреть в канале", url=chan_info['link'])]
         ]
-    )
-    await callback.message.edit_text(
-        "✅ Объявление опубликовано!\n\n"
-        "Можете посмотреть его в канале:",
-        reply_markup=kb
-    )
+            ),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка публикации: {str(e)}")
+
     await state.clear()

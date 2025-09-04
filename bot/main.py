@@ -4,6 +4,7 @@ from handlers.commands import commands_router
 from handlers.sellbuy import sellbuy_router
 from handlers.shops import shops_router
 from aiogram.types import BotCommand
+from handlers.delivery import router as delivery_router
 
 
 async def set_commands(bot):
@@ -11,16 +12,17 @@ async def set_commands(bot):
         BotCommand(command="start", description="Сменить имя"),
         BotCommand(command="help", description="Поддержка"),
         BotCommand(command="sell", description="Создать объявление"),
-        BotCommand(command="repair", description="Запись на ремонт"),
-        BotCommand(command="racing", description="Создать гонку"),
+        BotCommand(command="stores", description="Запись (Мастерские, салоны и магазины)"),
+        BotCommand(command="delivery", description="Доставка"),
     ]
     await bot.set_my_commands(commands)
 
 
 async def main():
     await set_commands(bot)
-    dp.include_router(sellbuy_router)
+    dp.include_router(delivery_router)
     dp.include_router(commands_router)
+    dp.include_router(sellbuy_router)
     dp.include_router(shops_router)
     await dp.start_polling(bot, skip_updates=True)
 
