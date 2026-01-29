@@ -5,9 +5,9 @@ services:
     image: postgres:15
     restart: always
     environment:
-      POSTGRES_DB: teztez
-      POSTGRES_USER: teztez
-      POSTGRES_PASSWORD: teztez
+      POSTGRES_DB: v
+      POSTGRES_USER: v
+      POSTGRES_PASSWORD: v
     ports:
       - "5433:5432"
     volumes:
@@ -28,13 +28,13 @@ services:
     environment:
       - DJANGO_SETTINGS_MODULE=backend.settings
       - DB_HOST=db
-      - DB_NAME=teztez
-      - DB_USER=teztez
-      - DB_PASS=teztez
-      - DB_PORT=5432
-      - DJANGO_SUPERUSER_USERNAME=baka123
-      - DJANGO_SUPERUSER_EMAIL=ikaoss222@gmail.com
-      - DJANGO_SUPERUSER_PASSWORD=7532169
+      - DB_NAME=g
+      - DB_USER=c
+      - DB_PASS=v
+      - DB_PORT=v
+      - DJANGO_SUPERUSER_USERNAME=g
+      - DJANGO_SUPERUSER_EMAIL=ih
+      - DJANGO_SUPERUSER_PASSWORD=b
     depends_on:
       - db
     ports:
